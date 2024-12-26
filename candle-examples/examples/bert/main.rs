@@ -40,7 +40,7 @@ struct Args {
 
     /// The number of times to run the prompt.
     #[arg(long, default_value = "1")]
-    n: usize,
+    iterations: usize,
 
     /// L2 normalization for embeddings.
     #[arg(long, default_value = "true")]
@@ -124,14 +124,21 @@ fn main() -> Result<()> {
         let token_ids = Tensor::new(&tokens[..], device)?.unsqueeze(0)?;
         let token_type_ids = token_ids.zeros_like()?;
         println!("Loaded and encoded {:?}", start.elapsed());
-        for idx in 0..args.n {
+
+        let mut total_duration = std::time::Duration::new(0, 0);
+        let warmup_iterations = 2; // 热身的次数，通常是 1
+        for idx in 0..args.iterations {
             let start = std::time::Instant::now();
             let ys = model.forward(&token_ids, &token_type_ids, None)?;
-            if idx == 0 {
+            if idx < warmup_iterations {
                 println!("{ys}");
+            } else {
+                total_duration += start.elapsed();
             }
-            println!("Took {:?}", start.elapsed());
         }
+        let avg_duration = total_duration / (args.iterations - warmup_iterations) as u32;
+        println!("Average time per iteration: {:?}", avg_duration);
+        println!("Took {:?}", start.elapsed());
     } else {
         let sentences = [
             "The cat sits outside",
@@ -175,7 +182,22 @@ fn main() -> Result<()> {
         let attention_mask = Tensor::stack(&attention_mask, 0)?;
         let token_type_ids = token_ids.zeros_like()?;
         println!("running inference on batch {:?}", token_ids.shape());
-        let embeddings = model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
+        // let embeddings = model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
+        let mut total_duration = std::time::Duration::new(0, 0);
+        let warmup_iterations = 2; // 热身的次数，通常是 1
+        let mut embeddings = model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
+        for idx in 0..args.iterations {
+            let start = std::time::Instant::now();
+            model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
+            if idx < warmup_iterations {
+                println!("1 step");
+            } else {
+                total_duration += start.elapsed();
+            }
+        }
+        let avg_duration = total_duration / (args.iterations - warmup_iterations) as u32;
+        println!("Average time per iteration: {:?}", avg_duration);
+        println!("Took {:?}", start.elapsed());
         println!("generated embeddings {:?}", embeddings.shape());
         // Apply some avg-pooling by taking the mean embedding value for all tokens (including padding)
         let (_n_sentence, n_tokens, _hidden_size) = embeddings.dims3()?;
