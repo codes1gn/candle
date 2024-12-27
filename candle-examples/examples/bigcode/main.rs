@@ -45,37 +45,53 @@ impl TextGeneration {
         println!("starting the inference loop");
         print!("{prompt}");
         std::io::stdout().flush()?;
-        let mut tokens = self
-            .tokenizer
-            .encode(prompt, true)
-            .map_err(E::msg)?
-            .get_ids()
-            .to_vec();
 
-        let mut new_tokens = vec![];
-        let start_gen = std::time::Instant::now();
-        for index in 0..sample_len {
-            let (context_size, past_len) = if self.model.config().use_cache && index > 0 {
-                (1, tokens.len().saturating_sub(1))
-            } else {
-                (tokens.len(), 0)
-            };
-            let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
-            let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
-            let logits = self.model.forward(&input, past_len)?;
-            let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
+        let mut total_duration = 0.0;
+        let warmup_iterations = 0; // 热身的次数，通常是 1
+        let mut tokens_generated = 0;
+        for index in 0..1 {
+            let mut tokens = self
+                .tokenizer
+                .encode(prompt, true)
+                .map_err(E::msg)?
+                .get_ids()
+                .to_vec();
+            let mut new_tokens = vec![];
+            let start_gen = std::time::Instant::now();
+            for index in 0..sample_len {
+                let (context_size, past_len) = if self.model.config().use_cache && index > 0 {
+                    (1, tokens.len().saturating_sub(1))
+                } else {
+                    (tokens.len(), 0)
+                };
+                let ctxt = &tokens[tokens.len().saturating_sub(context_size)..];
+                let input = Tensor::new(ctxt, &self.device)?.unsqueeze(0)?;
+                let logits = self.model.forward(&input, past_len)?;
+                let logits = logits.squeeze(0)?.to_dtype(DType::F32)?;
 
-            let next_token = self.logits_processor.sample(&logits)?;
-            tokens.push(next_token);
-            new_tokens.push(next_token);
-            let token = self.tokenizer.decode(&[next_token], true).map_err(E::msg)?;
-            print!("{token}");
-            std::io::stdout().flush()?;
+                let next_token = self.logits_processor.sample(&logits)?;
+                tokens.push(next_token);
+                new_tokens.push(next_token);
+                let token = self.tokenizer.decode(&[next_token], true).map_err(E::msg)?;
+                // print!("{token}");
+                std::io::stdout().flush()?;
+            }
+            let dt = start_gen.elapsed();
+            if index >= warmup_iterations {
+                tokens_generated += sample_len;
+                total_duration += dt.as_secs_f64();
+                println!(
+                    "Round {index}, {sample_len} tokens generated, {total_duration} secs past"
+                );
+            }
+            tokens = vec![];
+            new_tokens = vec![];
         }
-        let dt = start_gen.elapsed();
         println!(
-            "{sample_len} tokens generated ({:.3} token/s)",
-            sample_len as f64 / dt.as_secs_f64(),
+            // "{sample_len} tokens generated ({:.3} token/s)",
+            // sample_len as f64 / dt.as_secs_f64(),
+            "{tokens_generated} tokens generated ({:.3} token/s)",
+            tokens_generated as f64 / total_duration,
         );
         Ok(())
     }
